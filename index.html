@@ -194,7 +194,7 @@ function LoginScreen({onLogin}){
 }
 
 /* ══════════ রোল না থাকলে দেখানোর স্ক্রিন ══════════ */
-function NoRoleScreen({user, onLogout}){
+function NoRoleScreen({user, onLogout, err}){
   return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",
     justifyContent:"center",padding:20}},
     React.createElement(Card,{style:{maxWidth:380,textAlign:"center"}},
@@ -203,6 +203,8 @@ function NoRoleScreen({user, onLogout}){
         "এই ইমেইলের জন্য এখনো কোনো রোল নির্ধারণ করা হয়নি"),
       React.createElement("div",{style:{fontSize:12,color:C.mu,marginBottom:16}},
         user.email, " — অ্যাডমিনকে বলুন এই ইমেইলে হোস্টেল/একাডেমিক/অ্যাডমিন অ্যাক্সেস দিতে।"),
+      err && React.createElement("div",{style:{fontSize:11,color:C.re,background:C.reL,
+        borderRadius:8,padding:"7px 9px",marginBottom:14,textAlign:"left"}}, err),
       React.createElement("button",{onClick:onLogout,
         style:{padding:"9px 18px",borderRadius:10,border:"none",background:C.puL,color:C.pu,fontWeight:700}},
         "লগআউট")));
@@ -428,17 +430,63 @@ function RolesTab(){
 function App(){
   const [user,setUser]=useState(undefined); // undefined = লোড হচ্ছে, null = লগইন নেই
   const [role,setRole]=useState(undefined);
+  const [authErr,setAuthErr]=useState("");
+  const [stuck,setStuck]=useState(false);
 
   useEffect(()=>{
-    return auth.onAuthStateChanged(u=>{
-      setUser(u||null);
-      if(!u){ setRole(undefined); return; }
-      const key = emailKey(u.email);
-      haisDb.ref("app_roles/"+key).once("value").then(snap=>{
-        setRole(snap.val()||null);
-      });
-    });
+    // ৮ সেকেন্ডেও প্রাথমিক auth-স্টেট না এলে "আটকে গেছে" ধরে নিয়ে ডায়াগনস্টিক দেখানো হবে
+    const watchdog = setTimeout(()=>{ if(user===undefined) setStuck(true); }, 8000);
+
+    let unsub = ()=>{};
+    try{
+      unsub = auth.onAuthStateChanged(
+        u=>{
+          clearTimeout(watchdog);
+          setUser(u||null);
+          if(!u){ setRole(undefined); return; }
+          const key = emailKey(u.email);
+          haisDb.ref("app_roles/"+key).once("value")
+            .then(snap=>{ setRole(snap.val()||null); })
+            .catch(e=>{
+              setAuthErr("রোল তথ্য পড়া যায়নি: "+e.message+
+                " — Firebase Database Rules-এ 'app_roles' পাথে read অনুমতি আছে কিনা চেক করুন।");
+              setRole(null);
+            });
+        },
+        e=>{
+          clearTimeout(watchdog);
+          setAuthErr("Authentication চালু করা যায়নি: "+e.message);
+          setUser(null);
+        }
+      );
+    }catch(e){
+      clearTimeout(watchdog);
+      setAuthErr("Firebase শুরু করা যায়নি: "+e.message+
+        " — HAIS_FIREBASE কনফিগারেশন ঠিক আছে কিনা, এবং এই ডোমেইন Firebase Console-এর "+
+        "Authentication → Settings → Authorized domains-এ যোগ করা আছে কিনা চেক করুন।");
+      setStuck(true);
+    }
+    return ()=>{ clearTimeout(watchdog); unsub(); };
   },[]);
+
+  if(stuck && user===undefined){
+    return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",
+      justifyContent:"center",padding:20}},
+      React.createElement(Card,{style:{maxWidth:380}},
+        React.createElement("div",{style:{fontWeight:700,fontSize:14,color:C.re,marginBottom:8}},
+          "⚠️ লোড হতে অস্বাভাবিক সময় লাগছে"),
+        authErr && React.createElement("div",{style:{fontSize:12,color:C.re,marginBottom:10,
+          background:C.reL,borderRadius:8,padding:"8px 10px"}}, authErr),
+        React.createElement("div",{style:{fontSize:12,color:C.mu,lineHeight:1.8}},
+          "সাধারণ কারণগুলো চেক করুন:", React.createElement("br",null),
+          "১. এই ডোমেইনটা Firebase Console → Authentication → Settings → ",
+          React.createElement("b",null,"Authorized domains"),"-এ যোগ করা আছে কিনা", React.createElement("br",null),
+          "২. ইন্টারনেট সংযোগ ঠিক আছে কিনা (VPN/নেটওয়ার্ক ফায়ারওয়াল Google-এর ডোমেইন ব্লক করছে কিনা)", React.createElement("br",null),
+          "৩. `index.html`-এ `HAIS_FIREBASE` কনফিগারেশনের মান ঠিক আছে কিনা"),
+        React.createElement("button",{onClick:()=>window.location.reload(),
+          style:{marginTop:14,width:"100%",padding:"9px",borderRadius:10,border:"none",
+            background:C.pu,color:"#fff",fontWeight:700}}, "🔄 আবার চেষ্টা করুন")));
+  }
 
   if(user===undefined || (user && role===undefined)){
     return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",
@@ -448,7 +496,7 @@ function App(){
     return React.createElement(LoginScreen,{onLogin:setUser});
   }
   if(!role){
-    return React.createElement(NoRoleScreen,{user, onLogout:()=>auth.signOut()});
+    return React.createElement(NoRoleScreen,{user, onLogout:()=>auth.signOut(), err:authErr});
   }
   return React.createElement(Dashboard,{user, role, onLogout:()=>auth.signOut()});
 }
