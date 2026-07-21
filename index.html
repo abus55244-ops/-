@@ -225,7 +225,7 @@ function Dashboard({user, role, onLogout}){
             fontSize:11,fontWeight:700}},"লগআউট"))),
     React.createElement("div",{style:{display:"flex",gap:6,padding:"10px 16px",flexWrap:"wrap"}},
       [["home","🏠 হোম"],["students","👨‍🎓 ইউনিফাইড ছাত্র প্রোফাইল"],
-       ...(role.isAdmin?[["roles","🔑 রোল ম্যানেজমেন্ট"]]:[])]
+       ...(role.isAdmin?[["roles","🔑 রোল ম্যানেজমেন্ট"],["dayScholars","🎒 অনাবাসিক তালিকা"]]:[])]
         .map(([id,label])=>React.createElement("button",{key:id,onClick:()=>setTab(id),
           style:{padding:"7px 14px",borderRadius:20,border:`1px solid ${tab===id?C.pu:C.bd}`,
             background:tab===id?C.puL:"transparent",color:tab===id?C.pu:C.mu,
@@ -234,7 +234,8 @@ function Dashboard({user, role, onLogout}){
       React.createElement(InstallBanner,null),
       tab==="home" && React.createElement(HomeTab,{role}),
       tab==="students" && React.createElement(StudentsTab,{role}),
-      tab==="roles" && role.isAdmin && React.createElement(RolesTab,null)));
+      tab==="roles" && role.isAdmin && React.createElement(RolesTab,null),
+      tab==="dayScholars" && role.isAdmin && React.createElement(DayScholarsTab,null)));
 }
 
 function HomeTab({role}){
@@ -267,6 +268,7 @@ function StudentsTab({role}){
   const [hostelRoster,setHostelRoster]=useState(null);
   const [haisCustom,setHaisCustom]=useState(null);
   const [haisDept,setHaisDept]=useState({});
+  const [dayScholars,setDayScholars]=useState(null);
   const [q,setQ]=useState("");
   const [selected,setSelected]=useState(null);
   const [err,setErr]=useState("");
@@ -283,18 +285,20 @@ function StudentsTab({role}){
       Object.values(v).forEach(x=>{ if(x&&x.name) out[x.name]=x.dept; });
       setHaisDept(out);
     });
+    haisDb.ref("day_scholars").on("value", snap=>setDayScholars(snap.val()||{}));
     return ()=>{ hostelDb.ref("studentRoster").off(); haisDb.ref("hais_data_v3/customStudents").off();
-      haisDb.ref("hais_data_v3/studentDepartments_v2").off(); };
+      haisDb.ref("hais_data_v3/studentDepartments_v2").off(); haisDb.ref("day_scholars").off(); };
   },[]);
 
   const combined = useMemo(()=>{
-    if(hostelRoster===null || haisCustom===null) return null;
+    if(hostelRoster===null || haisCustom===null || dayScholars===null) return null;
     const allClasses = new Set([...Object.keys(DEFAULT_STUDENTS),
       ...Object.keys(hostelRoster), ...Object.keys(haisCustom)]);
     const rows = [];
     allClasses.forEach(cls=>{
       const hostelList = hostelRoster[cls] !== undefined ? hostelRoster[cls] : (DEFAULT_STUDENTS[cls]||[]);
       const haisList = haisCustom[cls] !== undefined ? haisCustom[cls] : (DEFAULT_STUDENTS[cls]||[]);
+      const dayScholarList = dayScholars[cls] || [];
       const names = new Set([...hostelList, ...haisList]);
       names.forEach(name=>{
         rows.push({
@@ -302,12 +306,13 @@ function StudentsTab({role}){
           name, cls,
           inHostel: hostelList.includes(name),
           inAcademic: haisList.includes(name),
+          isDayScholar: dayScholarList.includes(name),
           dept: haisDept[name]||null,
         });
       });
     });
     return rows.sort((a,b)=> a.name.localeCompare(b.name));
-  },[hostelRoster,haisCustom,haisDept]);
+  },[hostelRoster,haisCustom,haisDept,dayScholars]);
 
   const filtered = useMemo(()=>{
     if(!combined) return [];
@@ -316,9 +321,33 @@ function StudentsTab({role}){
     return combined.filter(r=>r.name.includes(query));
   },[combined,q]);
 
-  const mismatchCount = combined ? combined.filter(r=>!r.inHostel||!r.inAcademic).length : 0;
+  // অনাবাসিক ছাত্রের ক্ষেত্রে হোস্টেলে না থাকাটা প্রত্যাশিত — সেটাকে মিসিং/মিসম্যাচ হিসেবে গোনা হবে না
+  const mismatchCount = combined
+    ? combined.filter(r=>(!r.inHostel && !r.isDayScholar) || !r.inAcademic).length
+    : 0;
 
-  return React.createElement("div",null,
+  const listItems = filtered.slice(0,200).map(r=>{
+    const hostelBadge = r.isDayScholar
+      ? React.createElement("span",{key:"h",style:{fontSize:10,fontWeight:700,padding:"2px 7px",
+          borderRadius:10,background:"#eef1f5",color:"#5a6472"}}, "🎒 অনাবাসিক")
+      : React.createElement("span",{key:"h",style:{fontSize:10,fontWeight:700,padding:"2px 7px",
+          borderRadius:10,background:r.inHostel?C.grL:C.reL,color:r.inHostel?C.gr:C.re}},
+          r.inHostel?"🏠 হোস্টেল":"🏠 নেই");
+    const academicBadge = React.createElement("span",{key:"a",style:{fontSize:10,fontWeight:700,padding:"2px 7px",
+      borderRadius:10,background:r.inAcademic?C.puL:C.reL,color:r.inAcademic?C.pu:C.re}},
+      r.inAcademic?"📚 একাডেমিক":"📚 নেই");
+    return React.createElement("div",{key:r.key, onClick:()=>setSelected(r),
+      style:{display:"flex",justifyContent:"space-between",alignItems:"center",
+        padding:"9px 12px",background:"#fff",border:`1px solid ${C.bd}`,borderRadius:10,
+        marginBottom:6,cursor:"pointer"}},
+      React.createElement("div",null,
+        React.createElement("div",{style:{fontWeight:600,fontSize:13}}, r.name),
+        React.createElement("div",{style:{fontSize:10.5,color:C.mu}},
+          "শ্রেণি "+r.cls+(CLASS_BN[r.cls]?" ("+CLASS_BN[r.cls]+")":""))),
+      React.createElement("div",{style:{display:"flex",gap:4}}, hostelBadge, academicBadge));
+  });
+
+  const resultsList = React.createElement("div",null,
     React.createElement(Card,null,
       React.createElement("div",{style:{fontWeight:700,fontSize:14,marginBottom:4}},"👨‍🎓 ইউনিফাইড ছাত্র প্রোফাইল"),
       React.createElement("div",{style:{fontSize:11.5,color:C.mu,lineHeight:1.6}},
@@ -336,43 +365,166 @@ function StudentsTab({role}){
           fontSize:13,marginBottom:10}}),
       React.createElement("div",{style:{fontSize:11,color:C.mu,marginBottom:8}},
         filtered.length+" জন ছাত্র"),
-      React.createElement("div",null, filtered.slice(0,200).map(r=>
-        React.createElement("div",{key:r.key, onClick:()=>setSelected(r),
-          style:{display:"flex",justifyContent:"space-between",alignItems:"center",
-            padding:"9px 12px",background:"#fff",border:`1px solid ${C.bd}`,borderRadius:10,
-            marginBottom:6,cursor:"pointer"}},
-          React.createElement("div",null,
-            React.createElement("div",{style:{fontWeight:600,fontSize:13}}, r.name),
-            React.createElement("div",{style:{fontSize:10.5,color:C.mu}},
-              "শ্রেণি "+r.cls+(CLASS_BN[r.cls]?" ("+CLASS_BN[r.cls]+")":""))),
-          React.createElement("div",{style:{display:"flex",gap:4}},
-            React.createElement("span",{style:{fontSize:10,fontWeight:700,padding:"2px 7px",
-              borderRadius:10,background:r.inHostel?C.grL:C.reL,color:r.inHostel?C.gr:C.re}},
-              r.inHostel?"🏠 হোস্টেল":"🏠 নেই"),
-            React.createElement("span",{style:{fontSize:10,fontWeight:700,padding:"2px 7px",
-              borderRadius:10,background:r.inAcademic?C.puL:C.reL,color:r.inAcademic?C.pu:C.re}},
-              r.inAcademic?"📚 একাডেমিক":"📚 নেই")))))),
-    selected && React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",
-      display:"flex",alignItems:"center",justifyContent:"center",padding:16,zIndex:99},
-      onClick:()=>setSelected(null)},
-      React.createElement("div",{onClick:e=>e.stopPropagation(),
-        style:{background:"#fff",borderRadius:16,padding:20,maxWidth:360,width:"100%"}},
-        React.createElement("div",{style:{fontWeight:800,fontSize:16,color:C.pu,marginBottom:4}},selected.name),
-        React.createElement("div",{style:{fontSize:12,color:C.mu,marginBottom:14}},
-          "শ্রেণি "+selected.cls+(selected.dept?" • বিভাগ: "+selected.dept:"")),
-        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
-          selected.inHostel && React.createElement("a",{href:CONFIG.HOSTEL_APP_URL,target:"_blank",rel:"noopener",
-            style:{padding:"10px",borderRadius:10,background:C.goldL,color:C.gold,fontWeight:700,
-              fontSize:12,textDecoration:"none",textAlign:"center"}},
-            "🏠 হোস্টেল অ্যাপে বিস্তারিত দেখুন (নাম সার্চ করুন)"),
-          selected.inAcademic && React.createElement("a",{href:CONFIG.HAIS_APP_URL,target:"_blank",rel:"noopener",
-            style:{padding:"10px",borderRadius:10,background:C.puL,color:C.pu,fontWeight:700,
-              fontSize:12,textDecoration:"none",textAlign:"center"}},
-            "📚 একাডেমিক অ্যাপে বিস্তারিত দেখুন (নাম সার্চ করুন)")),
-        React.createElement("button",{onClick:()=>setSelected(null),
-          style:{width:"100%",marginTop:14,padding:"9px",borderRadius:10,border:`1px solid ${C.bd}`,
-            background:"transparent",color:C.mu,fontWeight:600}}, "বন্ধ করুন"))));
+      React.createElement("div",null, listItems)),
+    selected && React.createElement(StudentDetailModal,{student:selected, onClose:()=>setSelected(null)}));
+
+  return resultsList;
 }
+
+/* ══════════ ছাত্র প্রোফাইল ডিটেইল মডাল — দুই ডেটাবেস থেকে কাঁচা রেকর্ড টেনে দেখায় ══════════ */
+function StudentDetailModal({student, onClose}){
+  const [data,setData] = useState(null); // null = লোড হচ্ছে
+  const [err,setErr] = useState("");
+
+  useEffect(()=>{
+    let cancelled=false;
+    setData(null); setErr("");
+    const upperName = normalizeName(student.name);
+
+    Promise.all([
+      hostelDb.ref("behaviorRecords").once("value").catch(()=>null),
+      hostelDb.ref("healthRecords").once("value").catch(()=>null),
+      hostelDb.ref("leaveRecords").once("value").catch(()=>null),
+      haisDb.ref("hais_data_v3/results_v2").once("value").catch(()=>null),
+      haisDb.ref("hais_data_v3/studentAttendance_v2").once("value").catch(()=>null),
+    ]).then(([bhSnap,hlSnap,lvSnap,resSnap,attSnap])=>{
+      if(cancelled) return;
+
+      const matchesName = (v) => v && normalizeName(v.stuName || v.name) === upperName;
+
+      const toArr = (snap) => snap ? Object.values(snap.val()||{}) : [];
+
+      const behavior = toArr(bhSnap).filter(matchesName)
+        .sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,15);
+
+      const health = toArr(hlSnap).filter(matchesName)
+        .sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,10);
+
+      const todayISO = new Date().toISOString().slice(0,10);
+      const leaves = toArr(lvSnap).filter(matchesName)
+        .sort((a,b)=>(b.fromISO||"").localeCompare(a.fromISO||"")).slice(0,10);
+      const activeLeave = leaves.find(r => (r.fromISO||"9999") <= todayISO && (r.toISO||"0000") >= todayISO);
+
+      const results = toArr(resSnap).filter(r => normalizeName(r.name) === upperName)
+        .sort((a,b)=>(b.savedAt||"").localeCompare(a.savedAt||""));
+
+      // studentAttendance_v2 রেকর্ডে attendance/homework অবজেক্টে ছাত্রদের নাম কী হিসেবে থাকে
+      const attRaw = toArr(attSnap);
+      const attendanceRows = [];
+      attRaw.forEach(rec=>{
+        const attMap = rec.attendance || {};
+        const hwMap = rec.homework || {};
+        Object.keys({...attMap, ...hwMap}).forEach(nm=>{
+          if(normalizeName(nm) === upperName){
+            attendanceRows.push({
+              date: rec.dateLabel || rec.isoDate, isoDate: rec.isoDate,
+              cls: rec.cls, subject: rec.subject,
+              attStatus: attMap[nm] || null, hwStatus: hwMap[nm] || null,
+            });
+          }
+        });
+      });
+      attendanceRows.sort((a,b)=>(b.isoDate||"").localeCompare(a.isoDate||""));
+
+      setData({ behavior, health, leaves, activeLeave, results, attendanceRows: attendanceRows.slice(0,15) });
+    }).catch(e=>{ if(!cancelled) setErr("তথ্য পড়া যায়নি: "+e.message); });
+
+    return ()=>{ cancelled=true; };
+  },[student.key]);
+
+  const Section = ({icon,title,color,children}) => React.createElement("div",{style:{marginBottom:14}},
+    React.createElement("div",{style:{fontWeight:700,fontSize:12.5,color,marginBottom:6}}, icon+" "+title),
+    children);
+
+  const EmptyNote = (txt) => React.createElement("div",{style:{fontSize:11,color:C.mu,fontStyle:"italic"}}, txt);
+
+  const sections = !data ? null : [
+    Section({icon:"📊",title:"পরীক্ষার ফলাফল",color:C.pu,children:
+      data.results.length===0 ? EmptyNote("কোনো ফলাফল রেকর্ড পাওয়া যায়নি") :
+      React.createElement("div",null, data.results.slice(0,10).map((r,i)=>
+        React.createElement("div",{key:i,style:{display:"flex",justifyContent:"space-between",
+          padding:"6px 8px",background:C.puL,borderRadius:7,marginBottom:4,fontSize:11.5}},
+          React.createElement("span",null, r.subject+" • "+(r.examName||r.examType||"")),
+          React.createElement("span",{style:{fontWeight:700,color:C.pu}},
+            r.absent ? "অনুপস্থিত" : (r.marks!=null ? r.marks+"/"+(r.fullMarks||100) : "—")))))
+    }),
+
+    Section({icon:"📝",title:"ক্লাস হাজিরা ও হোমওয়ার্ক (একাডেমিক)",color:C.pu,children:
+      data.attendanceRows.length===0 ? EmptyNote("কোনো রেকর্ড পাওয়া যায়নি") :
+      React.createElement("div",null, data.attendanceRows.slice(0,8).map((r,i)=>
+        React.createElement("div",{key:i,style:{display:"flex",justifyContent:"space-between",
+          padding:"6px 8px",background:"#f7f7fa",borderRadius:7,marginBottom:4,fontSize:11}},
+          React.createElement("span",null, r.date+" • "+r.subject),
+          React.createElement("span",null,
+            r.attStatus==="absent"?"❌ অনুপস্থিত":r.attStatus==="late"?"⏰ দেরি":"✓ উপস্থিত",
+            r.hwStatus==="notdone"?" • হোমওয়ার্ক করেনি":r.hwStatus==="tried"?" • চেষ্টা করেছে":""))))
+    }),
+
+    Section({icon:"🧭",title:"আচরণ রেকর্ড (হোস্টেল)",color:C.gold,children:
+      data.behavior.length===0 ? EmptyNote("কোনো আচরণ রেকর্ড পাওয়া যায়নি") :
+      React.createElement("div",null, data.behavior.map((r,i)=>
+        React.createElement("div",{key:i,style:{display:"flex",justifyContent:"space-between",
+          padding:"6px 8px",background:r.type==="minus"?C.reL:C.grL,borderRadius:7,marginBottom:4,fontSize:11.5}},
+          React.createElement("span",null, r.cat||"—"),
+          React.createElement("span",{style:{fontWeight:700,color:r.type==="minus"?C.re:C.gr}},
+            (r.type==="minus"?"−":"+")+(r.pts||"")))))
+    }),
+
+    Section({icon:"🏥",title:"স্বাস্থ্য (হোস্টেল)",color:C.gold,children:
+      data.health.length===0 ? EmptyNote("কোনো স্বাস্থ্য রেকর্ড নেই") :
+      React.createElement("div",null, data.health.slice(0,5).map((r,i)=>
+        React.createElement("div",{key:i,style:{padding:"6px 8px",background:C.goldL,borderRadius:7,
+          marginBottom:4,fontSize:11.5}},
+          (r.status==="active"?"🔴 অসুস্থ":r.status==="recovering"?"🟡 সুস্থ হচ্ছে":r.status||"—"),
+          r.note?" — "+r.note:"")))
+    }),
+
+    Section({icon:"🏖",title:"ছুটির ইতিহাস (হোস্টেল)",color:C.gold,children: [
+      data.activeLeave && React.createElement("div",{key:"active",style:{background:C.goldL,borderRadius:7,
+        padding:"6px 8px",marginBottom:6,fontSize:11.5,fontWeight:700,color:C.gold}},
+        "🏠 বর্তমানে ছুটিতে আছে ("+data.activeLeave.fromISO+" – "+data.activeLeave.toISO+")"),
+      data.leaves.length===0 ? EmptyNote("কোনো ছুটির রেকর্ড নেই") :
+      React.createElement("div",{key:"list"}, data.leaves.slice(0,5).map((r,i)=>
+        React.createElement("div",{key:i,style:{padding:"6px 8px",background:"#f7f7fa",borderRadius:7,
+          marginBottom:4,fontSize:11}}, r.fromISO+" – "+r.toISO+(r.reason?" • "+r.reason:""))))
+    ]}),
+  ];
+
+  const headerBlock = React.createElement("div",null,
+    React.createElement("div",{style:{fontWeight:800,fontSize:16,color:C.pu,marginBottom:4}},student.name),
+    React.createElement("div",{style:{fontSize:12,color:C.mu,marginBottom:12}},
+      "শ্রেণি "+student.cls+(student.dept?" • বিভাগ: "+student.dept:"")),
+    student.isDayScholar && React.createElement("div",{style:{fontSize:11,color:"#5a6472",
+      background:"#eef1f5",borderRadius:8,padding:"7px 9px",marginBottom:12}},
+      "🎒 এই ছাত্র অনাবাসিক — হোস্টেলে যুক্ত করা হয় না, এটাই স্বাভাবিক।"),
+    React.createElement("div",{style:{display:"flex",gap:8,marginBottom:14}},
+      student.inHostel && React.createElement("a",{href:CONFIG.HOSTEL_APP_URL,target:"_blank",rel:"noopener",
+        style:{flex:1,padding:"8px",borderRadius:8,background:C.goldL,color:C.gold,fontWeight:700,
+          fontSize:11,textDecoration:"none",textAlign:"center"}}, "🏠 হোস্টেল অ্যাপ"),
+      student.inAcademic && React.createElement("a",{href:CONFIG.HAIS_APP_URL,target:"_blank",rel:"noopener",
+        style:{flex:1,padding:"8px",borderRadius:8,background:C.puL,color:C.pu,fontWeight:700,
+          fontSize:11,textDecoration:"none",textAlign:"center"}}, "📚 একাডেমিক অ্যাপ")),
+    err && React.createElement("div",{style:{fontSize:12,color:C.re,background:C.reL,borderRadius:8,
+      padding:"8px 10px",marginBottom:10}}, err),
+    !data && !err && React.createElement("div",{style:{textAlign:"center",color:C.mu,fontSize:12,padding:20}},
+      "লোড হচ্ছে..."),
+    data && React.createElement("div",null, sections));
+
+  const closeBtn = React.createElement("button",{onClick:onClose,
+    style:{width:"100%",marginTop:6,padding:"9px",borderRadius:10,border:`1px solid ${C.bd}`,
+      background:"transparent",color:C.mu,fontWeight:600}}, "বন্ধ করুন");
+
+  const modalBody = React.createElement("div",{onClick:e=>e.stopPropagation(),
+    style:{background:"#fff",borderRadius:16,padding:18,maxWidth:420,width:"100%",
+      maxHeight:"85vh",overflowY:"auto"}},
+    headerBlock, closeBtn);
+
+  return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",
+    display:"flex",alignItems:"center",justifyContent:"center",padding:12,zIndex:99},
+    onClick:onClose},
+    modalBody);
+}
+
 
 /* ══════════ রোল ম্যানেজমেন্ট (শুধু অ্যাডমিন) ══════════ */
 function RolesTab(){
@@ -423,6 +575,64 @@ function RolesTab(){
         React.createElement("div",{style:{fontWeight:700,fontSize:13,marginBottom:8}}, r.email),
         React.createElement("div",{style:{display:"flex",gap:14,flexWrap:"wrap"}}, checkboxes));
     }));
+}
+
+/* ══════════ অনাবাসিক (Day Scholar) তালিকা ব্যবস্থাপনা ══════════ */
+function DayScholarsTab(){
+  const [dayScholars,setDayScholars]=useState(null);
+  const [cls,setCls]=useState("X");
+  const [name,setName]=useState("");
+  const [msg,setMsg]=useState("");
+
+  useEffect(()=>{
+    haisDb.ref("day_scholars").on("value", snap=>setDayScholars(snap.val()||{}));
+    return ()=>haisDb.ref("day_scholars").off();
+  },[]);
+
+  const allClasses = ["IV","V","VI","VII","VIII","IX","X"];
+
+  const addName = ()=>{
+    const n = name.trim().toUpperCase();
+    if(!n){ setMsg("নাম লিখুন"); return; }
+    const current = (dayScholars && dayScholars[cls]) || [];
+    if(current.includes(n)){ setMsg("এই নাম ইতিমধ্যে তালিকায় আছে"); return; }
+    haisDb.ref("day_scholars/"+cls).set([...current, n]);
+    setName(""); setMsg("✅ যোগ করা হয়েছে");
+  };
+  const removeName = (c,n)=>{
+    const current = (dayScholars && dayScholars[c]) || [];
+    haisDb.ref("day_scholars/"+c).set(current.filter(x=>x!==n));
+  };
+
+  return React.createElement("div",null,
+    React.createElement(Card,null,
+      React.createElement("div",{style:{fontWeight:700,fontSize:14,marginBottom:4}},"🎒 অনাবাসিক ছাত্র তালিকা"),
+      React.createElement("div",{style:{fontSize:11.5,color:C.mu,lineHeight:1.6,marginBottom:10}},
+        "এই তালিকার ছাত্ররা একাডেমিক সিস্টেমে থাকলেও কখনো হোস্টেল রোস্টারে স্বয়ংক্রিয়ভাবে যোগ হবে না — ",
+        "রোস্টার-সিঙ্ক ফাংশন এদের বাদ দিয়ে চলবে।"),
+      React.createElement("div",{style:{display:"flex",gap:6,marginBottom:6}},
+        React.createElement("select",{value:cls,onChange:e=>setCls(e.target.value),
+          style:{padding:"8px",border:`1px solid ${C.bd}`,borderRadius:8,fontSize:12}},
+          allClasses.map(c=>React.createElement("option",{key:c,value:c}, c))),
+        React.createElement("input",{type:"text",value:name,onChange:e=>setName(e.target.value),
+          placeholder:"ছাত্রের নাম লিখুন...",
+          style:{flex:1,padding:"8px 10px",border:`1px solid ${C.bd}`,borderRadius:8,fontSize:12}}),
+        React.createElement("button",{onClick:addName,
+          style:{padding:"8px 16px",borderRadius:8,border:"none",background:C.pu,color:"#fff",
+            fontWeight:700,fontSize:12}},"যোগ করুন")),
+      msg && React.createElement("div",{style:{fontSize:11,color:C.pu,fontWeight:600}},msg)),
+    !dayScholars && React.createElement(Card,null,"লোড হচ্ছে..."),
+    dayScholars && Object.entries(dayScholars).filter(([,list])=>list && list.length>0).map(([c,list])=>
+      React.createElement(Card,{key:c},
+        React.createElement("div",{style:{fontWeight:700,fontSize:13,marginBottom:8}},
+          "শ্রেণি "+c+(CLASS_BN[c]?" ("+CLASS_BN[c]+")":"")),
+        list.map(n=>React.createElement("div",{key:n,
+          style:{display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"6px 10px",background:"#f7f7fa",borderRadius:8,marginBottom:5}},
+          React.createElement("span",{style:{fontSize:12}}, n),
+          React.createElement("button",{onClick:()=>removeName(c,n),
+            style:{border:"none",background:C.reL,color:C.re,borderRadius:6,padding:"3px 8px",
+              fontSize:11,fontWeight:700}}, "বাদ দিন"))))));
 }
 
 
