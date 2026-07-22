@@ -1,26 +1,27 @@
 /**
- * এই ফাংশনটি "abu-sayed-6c6b9" (HAIS) Firebase প্রজেক্টে ডিপ্লয় করতে হবে।
- * কাজ: /hais_data_v3/customStudents পরিবর্তন হলে, একই পরিবর্তন heritage-hostel
- *      প্রজেক্টের /studentRoster-এ প্রতিফলিত করে।
+ * এই ফাংশনটি "heritage-hostel" Firebase প্রজেক্টে ডিপ্লয় করতে হবে।
+ * কাজ: /studentRoster পরিবর্তন হলে, একই পরিবর্তন abu-sayed-6c6b9 (HAIS) প্রজেক্টের
+ *      /hais_data_v3/customStudents-এ প্রতিফলিত করে।
  */
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 
-// ── এই প্রজেক্টের (abu-sayed-6c6b9) নিজস্ব অ্যাডমিন অ্যাপ ──
+// ── এই প্রজেক্টের (heritage-hostel) নিজস্ব অ্যাডমিন অ্যাপ ──
 admin.initializeApp();
 
-// ── হোস্টেল (heritage-hostel) প্রজেক্টে লেখার জন্য দ্বিতীয় অ্যাডমিন অ্যাপ ──
-// serviceAccountKey.json = heritage-hostel প্রজেক্টের service account (এই ফোল্ডারেই রাখুন)
-const hostelServiceAccount = require("./serviceAccountKey.json");
-const hostelApp = admin.initializeApp(
+// ── HAIS (abu-sayed-6c6b9) প্রজেক্টে লেখার জন্য দ্বিতীয় অ্যাডমিন অ্যাপ ──
+// serviceAccountKey.json = abu-sayed-6c6b9 প্রজেক্টের service account (এই ফোল্ডারেই রাখুন)
+const haisServiceAccount = require("./serviceAccountKey.json");
+const haisApp = admin.initializeApp(
   {
-    credential: admin.credential.cert(hostelServiceAccount),
-    databaseURL: "https://heritage-hostel-default-rtdb.asia-southeast1.firebasedatabase.app",
+    credential: admin.credential.cert(haisServiceAccount),
+    databaseURL: "https://abu-sayed-6c6b9-default-rtdb.firebaseio.com",
   },
-  "hostelApp"
+  "haisApp"
 );
 
-// ── বেসলাইন রোস্টার — উভয় অ্যাপেই অভিন্ন ──
+// ── দুই অ্যাপের কোডে হার্ডকোড করা বেসলাইন রোস্টার (উভয় অ্যাপেই অভিন্ন) ──
+// HAIS-এ কোনো ক্লাস customStudents-এ override না থাকলে এই বেসলাইন ধরা হয়।
 const DEFAULT_STUDENTS = {
   IV: ["ARHAM RAFIN"],
   V: ["MD.MURSALIN SHEIKH","ABDULLAH AL TAMIM","ALIF ISLAM","ARIFUL PRAMANIK","ASIBUL ISLAM LIHAD CHOWDURY","HABIBUR RAHMAN BEPARI","HUJAIFA BIN SALMAN","SOHAN KHAN","TAWHID MAHTAB"],
@@ -31,6 +32,7 @@ const DEFAULT_STUDENTS = {
   X: ["MD. FAHIM FOKIR","MD. SIAM MONDOL","MD. SHAWON MONDOL","MD. TAHSIN ZAMAN","SAFWAN BIN SATTAR","SHAFAYET BIN JABBAR","ARHAM HASAN AKASH","SHAHRIAR NAFIZ SIFAT","ABDULLAH MOMIN","MD SHAD REZA","SOHEL MRIDHA","MD. SHOHIDUL ISLAM","MITUL BHUIYA","ABDULLAH BIN MUKHTER","MUNNA KHA","SABID ISLAM","MD. ALAMIN MRIDHA","SHAHRIYA MATUBBER","ADNAN HOSSEN ALIF","MUHTAMIM KABIR","S M RAHMAT ULLAH","AL HOSSAIN","MD OMOR FARUK TALHA","TAWHID ISLAM"],
 };
 
+// দুটো array-কে (ক্রম উপেক্ষা করে) তুলনা করার হেল্পার
 function sameList(a, b) {
   const x = [...(a || [])].sort();
   const y = [...(b || [])].sort();
@@ -38,36 +40,36 @@ function sameList(a, b) {
   return x.every((v, i) => v === y[i]);
 }
 
-exports.syncHAISRosterToHostel = functions.database
-  .ref("/hais_data_v3/customStudents")
+exports.syncHostelRosterToHAIS = functions.database
+  .ref("/studentRoster")
   .onWrite(async (change) => {
-    const haisCustom = change.after.val() || {};
-    const hostelDb = hostelApp.database();
+    const hostelRoster = change.after.val() || {};
+    const haisDb = haisApp.database();
 
-    const rosterSnap = await hostelDb.ref("studentRoster").once("value");
-    const hostelRoster = rosterSnap.val() || {};
+    const customSnap = await haisDb.ref("hais_data_v3/customStudents").once("value");
+    const haisCustom = customSnap.val() || {};
 
     const allClasses = new Set([
       ...Object.keys(DEFAULT_STUDENTS),
-      ...Object.keys(haisCustom),
+      ...Object.keys(hostelRoster),
     ]);
 
     const updates = {};
     for (const cls of allClasses) {
+      const hostelList = hostelRoster[cls] || [];
       const haisList =
         haisCustom[cls] !== undefined ? haisCustom[cls] : DEFAULT_STUDENTS[cls] || [];
-      const hostelList = hostelRoster[cls] || DEFAULT_STUDENTS[cls] || [];
 
-      if (!sameList(haisList, hostelList)) {
-        // HAIS-এর বর্তমান তালিকাই এখন "সঠিক" ধরে হোস্টেলের studentRoster-এ বসানো হচ্ছে
-        updates[`studentRoster/${cls}`] = haisList;
+      if (!sameList(hostelList, haisList)) {
+        // হোস্টেলের বর্তমান তালিকাই এখন "সঠিক" ধরে HAIS-এর customStudents override-এ বসানো হচ্ছে
+        updates[`hais_data_v3/customStudents/${cls}`] = hostelList;
       }
     }
 
     if (Object.keys(updates).length > 0) {
-      await hostelDb.ref("/").update(updates);
+      await haisDb.ref("/").update(updates);
       console.log(
-        `হোস্টেলে ${Object.keys(updates).length}টি ক্লাসের রোস্টার সিঙ্ক করা হলো:`,
+        `HAIS-এ ${Object.keys(updates).length}টি ক্লাসের রোস্টার সিঙ্ক করা হলো:`,
         Object.keys(updates)
       );
     }

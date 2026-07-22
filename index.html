@@ -55,7 +55,7 @@ const CONFIG = {
 };
 
 const HOSTEL_FIREBASE = {
-  apiKey: "AIzaSyD-PLACEHOLDER-HOSTEL-KEY", // TODO: হোস্টেল প্রজেক্টের আসল apiKey বসান
+  apiKey: "AIzaSyBHHpT14aFkXmVPjGrF2NOj8-CLjvsRi1w",
   databaseURL: "https://heritage-hostel-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "heritage-hostel",
 };
@@ -224,7 +224,7 @@ function Dashboard({user, role, onLogout}){
           style:{border:"none",background:C.reL,color:C.re,borderRadius:8,padding:"5px 10px",
             fontSize:11,fontWeight:700}},"লগআউট"))),
     React.createElement("div",{style:{display:"flex",gap:6,padding:"10px 16px",flexWrap:"wrap"}},
-      [["home","🏠 হোম"],["students","👨‍🎓 ইউনিফাইড ছাত্র প্রোফাইল"],
+      [["home","🏠 হোম"],["students","👨‍🎓 ইউনিফাইড ছাত্র প্রোফাইল"],["ranking","🏆 সম্মিলিত র‍্যাংকিং"],
        ...(role.isAdmin?[["roles","🔑 রোল ম্যানেজমেন্ট"],["dayScholars","🎒 অনাবাসিক তালিকা"]]:[])]
         .map(([id,label])=>React.createElement("button",{key:id,onClick:()=>setTab(id),
           style:{padding:"7px 14px",borderRadius:20,border:`1px solid ${tab===id?C.pu:C.bd}`,
@@ -234,6 +234,7 @@ function Dashboard({user, role, onLogout}){
       React.createElement(InstallBanner,null),
       tab==="home" && React.createElement(HomeTab,{role}),
       tab==="students" && React.createElement(StudentsTab,{role}),
+      tab==="ranking" && React.createElement(RankingTab,null),
       tab==="roles" && role.isAdmin && React.createElement(RolesTab,null),
       tab==="dayScholars" && role.isAdmin && React.createElement(DayScholarsTab,null)));
 }
@@ -259,9 +260,57 @@ function HomeTab({role}){
       React.createElement("a",{href:CONFIG.HAIS_APP_URL,target:"_blank",rel:"noopener",
         style:{display:"inline-block",padding:"9px 16px",borderRadius:10,background:C.pu,
           color:"#fff",fontWeight:700,fontSize:12,textDecoration:"none"}}, "একাডেমিক মডিউল খুলুন →")),
+    role.canAccessHostel && React.createElement(HomeworkNotDoneCard,null),
     !role.canAccessHostel && !role.canAccessAcademic && React.createElement(Card,null,
       "আপনার কোনো মডিউলে অ্যাক্সেস নেই — অ্যাডমিনের সাথে যোগাযোগ করুন।"));
 }
+
+/* ══════════ আজ যাদের হোমওয়ার্ক করা হয়নি (শুধু হোস্টেলবাসী) ══════════ */
+function HomeworkNotDoneCard(){
+  const [names,setNames] = useState(null); // null = লোড হচ্ছে
+  const [err,setErr] = useState("");
+
+  useEffect(()=>{
+    let cancelled=false;
+    Promise.all([
+      haisDb.ref("hais_data_v3/studentAttendance_v2").once("value").catch(()=>null),
+      hostelDb.ref("studentRoster").once("value").catch(()=>null),
+    ]).then(([attSnap,rosterSnap])=>{
+      if(cancelled) return;
+      const todayISO = new Date().toISOString().slice(0,10);
+      const attRaw = attSnap ? Object.values(attSnap.val()||{}) : [];
+      const hostelRoster = rosterSnap ? (rosterSnap.val()||{}) : {};
+      const hostelNameSet = new Set();
+      Object.keys(DEFAULT_STUDENTS).forEach(cls=>{
+        const list = hostelRoster[cls] !== undefined ? hostelRoster[cls] : (DEFAULT_STUDENTS[cls]||[]);
+        list.forEach(n=>hostelNameSet.add(normalizeName(n)));
+      });
+      const notDoneToday = new Set();
+      attRaw.forEach(rec=>{
+        if(rec.isoDate !== todayISO) return;
+        const hw = rec.homework || {};
+        Object.entries(hw).forEach(([nm,status])=>{
+          if(status==="notdone" && hostelNameSet.has(normalizeName(nm))) notDoneToday.add(nm);
+        });
+      });
+      setNames([...notDoneToday].sort());
+    }).catch(e=>{ if(!cancelled) setErr(e.message); });
+    return ()=>{ cancelled=true; };
+  },[]);
+
+  return React.createElement(Card,{style:{background:"#fff7ec",border:"1px solid #e6cf9e"}},
+    React.createElement("div",{style:{fontWeight:700,color:"#a9822f",marginBottom:6}},
+      "📚 আজ যাদের হোমওয়ার্ক করা হয়নি (হোস্টেলবাসী)"),
+    err && React.createElement("div",{style:{fontSize:11,color:C.re}}, err),
+    names===null && !err && React.createElement("div",{style:{fontSize:12,color:C.mu}},"লোড হচ্ছে..."),
+    names && names.length===0 && React.createElement("div",{style:{fontSize:12,color:C.gr,fontWeight:600}},
+      "✅ আজ সবাই হোমওয়ার্ক করেছে (অথবা এখনো কোনো ক্লাসে হাজিরা নেওয়া হয়নি)"),
+    names && names.length>0 && React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
+      names.map(n=>React.createElement("span",{key:n,style:{fontSize:11,fontWeight:700,
+        padding:"4px 10px",borderRadius:14,background:"#faeeda",color:"#a9822f",
+        border:"1px solid #e6cf9e"}}, n))));
+}
+
 
 /* ══════════ ইউনিফাইড ছাত্র প্রোফাইল ══════════ */
 function StudentsTab({role}){
@@ -635,6 +684,63 @@ function DayScholarsTab(){
               fontSize:11,fontWeight:700}}, "বাদ দিন"))))));
 }
 
+
+/* ══════════ সম্মিলিত র‍্যাংকিং (৭০% একাডেমিক + ৩০% হোস্টেল) ══════════ */
+function RankingTab(){
+  const [rows,setRows] = useState(null);
+  const [err,setErr] = useState("");
+  const ACADEMIC_WEIGHT = 0.7, HOSTEL_WEIGHT = 0.3;
+
+  useEffect(()=>{
+    let cancelled=false;
+    Promise.all([
+      haisDb.ref("student_rank_scores").once("value").catch(()=>null),
+      hostelDb.ref("student_rank_scores").once("value").catch(()=>null),
+    ]).then(([aSnap,hSnap])=>{
+      if(cancelled) return;
+      const academic = aSnap ? (aSnap.val()||{}) : {};
+      const hostel = hSnap ? (hSnap.val()||{}) : {};
+      const allKeys = new Set([...Object.keys(academic), ...Object.keys(hostel)]);
+      const combined = [];
+      allKeys.forEach(key=>{
+        const a = academic[key], h = hostel[key];
+        if(a && h){
+          combined.push({
+            key, name: a.name || h.name, cls: a.cls || h.cls,
+            academicScore: a.score, hostelScore: h.score,
+            combinedScore: Math.round(ACADEMIC_WEIGHT*a.score + HOSTEL_WEIGHT*h.score),
+          });
+        }
+      });
+      combined.sort((x,y)=>y.combinedScore-x.combinedScore);
+      combined.forEach((r,i)=>{ r.rank = i+1; });
+      setRows(combined);
+    }).catch(e=>{ if(!cancelled) setErr(e.message); });
+    return ()=>{ cancelled=true; };
+  },[]);
+
+  return React.createElement("div",null,
+    React.createElement(Card,null,
+      React.createElement("div",{style:{fontWeight:700,fontSize:14,marginBottom:4}},"🏆 সম্মিলিত র‍্যাংকিং"),
+      React.createElement("div",{style:{fontSize:11.5,color:C.mu,lineHeight:1.6}},
+        "একাডেমিক (৭০%) ও হোস্টেল (৩০%) — দুই অ্যাপের নিজস্ব চূড়ান্ত স্কোর দিয়ে হিসাব করা। ",
+        "যাদের দুই দিকেই স্কোর নেই (যেমন অনাবাসিক ছাত্র), তারা এই তালিকায় দেখা যাবে না।")),
+    err && React.createElement(Card,{style:{background:C.reL,color:C.re,fontSize:12}}, err),
+    rows===null && !err && React.createElement(Card,null,"লোড হচ্ছে..."),
+    rows && rows.length===0 && React.createElement(Card,null,
+      "এখনো কোনো স্কোর পাওয়া যায়নি — হোস্টেল ও HAIS অ্যাপে অন্তত একবার র‍্যাংকিং পেজ খোলা দরকার, ",
+      "তাহলেই স্কোর প্রকাশ হবে।"),
+    rows && rows.length>0 && rows.map(r=>
+      React.createElement("div",{key:r.key, style:{display:"flex",alignItems:"center",gap:10,
+        padding:"9px 12px",background:"#fff",border:`1px solid ${C.bd}`,borderRadius:10,marginBottom:6}},
+        React.createElement("div",{style:{minWidth:28,fontWeight:800,color:C.pu,fontSize:14,textAlign:"center"}},
+          r.rank),
+        React.createElement("div",{style:{flex:1}},
+          React.createElement("div",{style:{fontWeight:600,fontSize:13}}, r.name),
+          React.createElement("div",{style:{fontSize:10,color:C.mu}},
+            "শ্রেণি "+r.cls+" • একাডেমিক "+r.academicScore+" • হোস্টেল "+r.hostelScore)),
+        React.createElement("div",{style:{fontWeight:800,fontSize:16,color:C.gold}}, r.combinedScore))));
+}
 
 /* ══════════ রুট অ্যাপ ══════════ */
 function App(){
